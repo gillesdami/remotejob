@@ -4,6 +4,10 @@ Run python3 functions in remote containers.
 
 This is usefull to work locally but distribute part of the work in docker clusters.
 
+```bash
+pip install remotejob
+```
+
 ## Example
 
 ```python3
