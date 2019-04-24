@@ -8,7 +8,7 @@ Pyro4.config.SERIALIZER = 'dill'
 
 class RemoteJob():
     next_port = 8100
-    image = 'remotejobslave'
+    image = 'gillesdami/remotejob'
 
     def __init__(self, base_url='unix://var/run/docker.sock', host_name='0.0.0.0', port=None, **clientArgs):
         port = port if port else RemoteJob.next_port
