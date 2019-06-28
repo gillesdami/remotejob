@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='remotejob',
-      version='0.1.1',
+      version='0.2.0',
       description='Run python functions in a remote docker container',
       url='https://github.com/gillesdami/remotejob',
       author='Damien GILLES',

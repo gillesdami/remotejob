@@ -6,3 +6,4 @@ remotejob.egg-info/SOURCES.txt
 remotejob.egg-info/dependency_links.txt
 remotejob.egg-info/requires.txt
 remotejob.egg-info/top_level.txt
+test/test.py

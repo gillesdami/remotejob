@@ -1,16 +1,46 @@
-import pkgutil
 import asyncio
+from functools import wraps
+import pkgutil
 
 import docker
 import Pyro4
 
 Pyro4.config.SERIALIZER = 'dill'
 
+def future(f):
+    '''
+    Decorator which run a function asynchronously in the default event loop.
+    '''
+    def wrapper(*args, **kw):
+        return asyncio.get_event_loop().run_in_executor(None, f, *args, **kw)
+    
+    return wrapper
+
 class RemoteJob():
     next_port = 8100
     image = 'gillesdami/remotejob'
 
-    def __init__(self, base_url='unix://var/run/docker.sock', host_name='0.0.0.0', port=None, **clientArgs):
+    def __init__(self,
+        base_url='unix://var/run/docker.sock',
+        host_name='0.0.0.0',
+        port=None,
+        **clientArgs):
+        '''
+        Create a RemoteJob instance connecting to a Docker server.
+        You should use it with the `with` statement or ensure RemoteJob.close 
+        is called and free the resources on the docker server.
+
+        params:
+          base_url: URL to the Docker server. For example, 
+            unix:///var/run/docker.sock or tcp://127.0.0.1:1234
+          host_name: Host name of the exposed ports on the machine. 
+            For example 0.0.0.0 or example.com
+          port: Port to expose on the remote machine. Default 8100 
+            and is incremented for each instance.
+          **clientArgs: optional arguments of DockerClient. 
+            See https://docker-py.readthedocs.io/en/stable/client.html#client-reference
+        '''
+
         port = port if port else RemoteJob.next_port
         RemoteJob.next_port += 1
 
@@ -23,40 +53,47 @@ class RemoteJob():
             ports={'8000/tcp': port})
 
         try:
-            self.pyro = Pyro4.Proxy(self._get_pyro_obj(host_name, port))
+            # retrieve the pyro object id in the container's logs
+            pyro_obj_id = ''
+            for log in self.container.logs(stream=True):
+                pyro_obj_id += log.decode()
+
+                if log.decode() == '\r':
+                    break
+
+            pyro_obj_id = pyro_obj_id.strip().split('@')[0]
+            
+            self.pyro = Pyro4.Proxy('{}@{}:{}'.format(pyro_obj_id, host_name, str(port)))
         except Exception as e:
             self.close()
             raise e
     
-    async def pip_install(self, *args):
-        return await self._future(self._pip_install, *args)
-    
-    async def send_module_recursive(self, module, prefix = None):
-        return await self._future(self._send_module_recursive, module, prefix)
+    @future
+    def pip_install(self, *args):
+        '''
+        Install a pip dependency on the slave.
 
-    async def run(self, fn, *args, **arg_dict):
-        return await self._future(self._run, fn, arg_dict, *args)
-
-    def _get_pyro_obj(self, host=None, port=None):
-        pyro_obj_id = ''
-        for log in self.container.logs(stream=True):
-            pyro_obj_id += log.decode()
-
-            if log.decode() == '\r':
-                break
-
-        pyro_obj_id = pyro_obj_id.strip().split('@')[0]
-        
-        return '{}@{}:{}'.format(pyro_obj_id, host, str(port))
-
-    async def _future(self, fn, *args):
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, fn, *args)
-        
-    def _pip_install(self, *args):
+        params:
+          *args: Arguments passed to 'python -m pip install'
+        '''
         return self.pyro.pip_install(*args)
+    
+    @future
+    def send_module_recursive(self, module, prefix = None):
+        '''
+        Copy a module sources on the remote container.
 
-    def _send_module_recursive(self, module, prefix = None):
+        params:
+          module: Module to copy on the slave
+          prefix: Namespace of the module
+        
+        example:
+        from m1.m2 import m3
+        from remotejob import RemoteJob
+
+        with RemoteJob() as job:
+            job.send_module_recursive(m2, 'm1.m2')
+        '''
         prefix = prefix if prefix else module.__name__ + '.'
         
         with open(module.__file__) as h:
@@ -68,10 +105,26 @@ class RemoteJob():
             with open(path) as h:
                 self.pyro.create_module(module_name, h.read(), is_pkg)
 
-    def _run(self, fn, arg_dict= {}, *args):
+    @future
+    def run(self, fn, *args, **arg_dict):
+        '''
+        Run a function in the remote container and return the result.
+        The function source must be available on the remote container
+        (native, pip installed, or in a module passed to send_module_recursive).
+        All arguments and the returned value must be serializable by 
+        [dill](https://github.com/uqfoundation/dill) a pickle extension.
+
+        params:
+          fn: a reference to the function
+          *args: fn parameters
+          **arg_dict: fn parameters
+        '''
         return self.pyro.run(fn, *args, **arg_dict)
 
     def close(self):
+        '''
+        Remove the container.
+        '''
         self.container.stop()
         self.docker.close()
 
